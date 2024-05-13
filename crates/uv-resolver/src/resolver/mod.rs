@@ -6,13 +6,14 @@ use std::ops::Deref;
 use std::sync::Arc;
 use std::thread;
 
+use crate::pubgrub::PubGrubRange;
 use anyhow::Result;
 use dashmap::DashMap;
 use futures::{FutureExt, StreamExt, TryFutureExt};
 use itertools::Itertools;
 use pubgrub::error::PubGrubError;
-use pubgrub::range::Range;
 use pubgrub::solver::{Incompatibility, State};
+use pubgrub::version_set::VersionSet;
 use rustc_hash::{FxHashMap, FxHashSet};
 use tokio::sync::mpsc::{self, Receiver, Sender};
 use tokio::sync::oneshot;
@@ -519,7 +520,7 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
                         let python_version = requires_python
                             .iter()
                             .map(PubGrubSpecifier::try_from)
-                            .fold_ok(Range::full(), |range, specifier| {
+                            .fold_ok(PubGrubRange::full(), |range, specifier| {
                                 range.intersection(&specifier.into())
                             })?;
 
@@ -529,7 +530,7 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
                                 .pubgrub
                                 .add_incompatibility(Incompatibility::from_dependency(
                                     package.clone(),
-                                    Range::singleton(version.clone()),
+                                    PubGrubRange::singleton(version.clone()),
                                     (
                                         PubGrubPackage::from(PubGrubPackageInner::Python(kind)),
                                         python_version.clone(),
@@ -681,7 +682,7 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
     /// Visit the set of [`PubGrubPackage`] candidates prior to selection. This allows us to fetch
     /// metadata for all of the packages in parallel.
     fn pre_visit<'data>(
-        packages: impl Iterator<Item = (&'data PubGrubPackage, &'data Range<Version>)>,
+        packages: impl Iterator<Item = (&'data PubGrubPackage, &'data PubGrubRange)>,
         request_sink: &Sender<Request>,
     ) -> Result<(), ResolveError> {
         // Iterate over the potential packages, and fetch file metadata for any of them. These
@@ -709,7 +710,7 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
     fn choose_version(
         &self,
         package: &PubGrubPackage,
-        range: &Range<Version>,
+        range: &PubGrubRange,
         pins: &mut FilePins,
         visited: &mut FxHashSet<PackageName>,
         request_sink: &Sender<Request>,
@@ -983,7 +984,7 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
                         None,
                         &self.urls,
                     );
-                    let version = Range::singleton(editable.metadata.version.clone());
+                    let version = PubGrubRange::singleton(editable.metadata.version.clone());
 
                     // Update the package priorities.
                     priorities.insert(&package, &version);
@@ -1000,7 +1001,7 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
                                 None,
                                 &self.urls,
                             ),
-                            Range::singleton(editable.metadata.version.clone()),
+                            PubGrubRange::singleton(editable.metadata.version.clone()),
                         );
                     }
 
@@ -1210,7 +1211,7 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
                         marker: None,
                         url: url.clone(),
                     }),
-                    Range::singleton(version.clone()),
+                    PubGrubRange::singleton(version.clone()),
                 ),
                 (
                     PubGrubPackage::from(PubGrubPackageInner::Package {
@@ -1219,7 +1220,7 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
                         marker: None,
                         url: url.clone(),
                     }),
-                    Range::singleton(version.clone()),
+                    PubGrubRange::singleton(version.clone()),
                 ),
             ])),
         }
@@ -1515,7 +1516,7 @@ pub(crate) enum Request {
     /// A request to fetch the metadata from an already-installed distribution.
     Installed(InstalledDist),
     /// A request to pre-fetch the metadata for a package and the best-guess distribution.
-    Prefetch(PackageName, Range<Version>),
+    Prefetch(PackageName, PubGrubRange),
 }
 
 impl<'a> From<ResolvedDistRef<'a>> for Request {
@@ -1598,7 +1599,7 @@ enum Dependencies {
     /// Package dependencies are not available.
     Unavailable(UnavailableVersion),
     /// Container for all available package versions.
-    Available(Vec<(PubGrubPackage, Range<Version>)>),
+    Available(Vec<(PubGrubPackage, PubGrubRange)>),
 }
 
 fn uncapitalize<T: AsRef<str>>(string: T) -> String {
