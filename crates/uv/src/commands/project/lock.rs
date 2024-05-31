@@ -26,6 +26,7 @@ use crate::printer::Printer;
 pub(crate) async fn lock(
     upgrade: Upgrade,
     exclude_newer: Option<ExcludeNewer>,
+    python: Option<String>,
     preview: PreviewMode,
     cache: &Cache,
     printer: Printer,
@@ -38,7 +39,7 @@ pub(crate) async fn lock(
     let project = ProjectWorkspace::discover(std::env::current_dir()?, None).await?;
 
     // Discover or create the virtual environment.
-    let venv = project::init_environment(&project, preview, cache, printer)?;
+    let venv = project::init_environment(&project, python.as_deref(), preview, cache, printer)?;
 
     // Perform the lock operation.
     match do_lock(

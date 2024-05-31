@@ -18,6 +18,7 @@ use crate::virtualenv::{
 use crate::{Interpreter, PythonVersion};
 use std::borrow::Cow;
 
+use same_file::is_same_file;
 use std::collections::HashSet;
 use std::fmt::{self, Formatter};
 use std::num::ParseIntError;
@@ -938,6 +939,72 @@ impl InterpreterRequest {
         // Finally, we'll treat it as the name of an executable (i.e. in the search PATH)
         // e.g. foo.exe
         Self::ExecutableName(value.to_string())
+    }
+
+    /// Check if a given interpreter satisfies the interpreter request.
+    pub fn satisfied(&self, interpreter: &Interpreter) -> bool {
+        match self {
+            InterpreterRequest::Any => true,
+            InterpreterRequest::Version(version_request) => {
+                version_request.matches_interpreter(interpreter)
+            }
+            InterpreterRequest::Directory(directory) => {
+                // `sys.prefix` points to the venv root.
+                is_same_file(directory, interpreter.prefix()).unwrap_or(false)
+            }
+            InterpreterRequest::File(file) => {
+                // The interpreter satisfies the request both if it is the venv ...
+                if is_same_file(interpreter.sys_executable(), file).unwrap_or(false) {
+                    return true;
+                }
+                // ... or if it is the base interpreter the venv was created from.
+                if interpreter
+                    .base_executable()
+                    .is_some_and(|base_executable| {
+                        is_same_file(base_executable, file).unwrap_or(false)
+                    })
+                {
+                    return true;
+                }
+                false
+            }
+            InterpreterRequest::ExecutableName(name) => {
+                // First, see if we have a match in the venv ...
+                if interpreter
+                    .sys_executable()
+                    .file_name()
+                    .is_some_and(|filename| filename == name.as_str())
+                {
+                    return true;
+                }
+                // ... or the venv's base interpreter (without performing IO), if that fails, ...
+                if interpreter
+                    .base_executable()
+                    .and_then(|executable| executable.file_name())
+                    .is_some_and(|file_name| file_name == name.as_str())
+                {
+                    return true;
+                }
+                // ... check in `PATH`. The name we find here does not need to be the
+                // name we install, so we can find `foopython` here which got installed as `python`.
+                if which(name)
+                    .ok()
+                    .as_ref()
+                    .and_then(|executable| executable.file_name())
+                    .is_some_and(|file_name| file_name == name.as_str())
+                {
+                    return true;
+                }
+                false
+            }
+            InterpreterRequest::Implementation(implementation) => {
+                interpreter.implementation_name() == implementation.as_str()
+            }
+            InterpreterRequest::ImplementationVersion(implementation, version) => {
+                version.matches_interpreter(interpreter)
+                    && interpreter.implementation_name() == implementation.as_str()
+            }
+        }
     }
 }
 

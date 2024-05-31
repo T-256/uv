@@ -595,7 +595,7 @@ async fn run() -> Result<ExitStatus> {
             // Initialize the cache.
             let cache = cache.init()?.with_refresh(args.refresh);
 
-            commands::sync(args.extras, globals.preview, &cache, printer).await
+            commands::sync(args.extras, args.python, globals.preview, &cache, printer).await
         }
         Commands::Lock(args) => {
             // Resolve the settings from the command-line arguments and workspace configuration.
@@ -607,6 +607,7 @@ async fn run() -> Result<ExitStatus> {
             commands::lock(
                 args.upgrade,
                 args.exclude_newer,
+                args.python,
                 globals.preview,
                 &cache,
                 printer,

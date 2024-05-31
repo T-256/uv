@@ -17,7 +17,7 @@ use uv_dispatch::BuildDispatch;
 use uv_distribution::ProjectWorkspace;
 use uv_fs::Simplified;
 use uv_installer::{SatisfiesResult, SitePackages};
-use uv_interpreter::{find_default_interpreter, PythonEnvironment};
+use uv_interpreter::{InterpreterRequest, PythonEnvironment, SystemPython};
 use uv_requirements::{RequirementsSource, RequirementsSpecification};
 use uv_resolver::{FlatIndex, InMemoryIndex, Options};
 use uv_types::{BuildIsolation, HashStrategy, InFlight};
@@ -62,46 +62,81 @@ pub(crate) enum ProjectError {
 /// Initialize a virtual environment for the current project.
 pub(crate) fn init_environment(
     project: &ProjectWorkspace,
+    python: Option<&str>,
     preview: PreviewMode,
     cache: &Cache,
     printer: Printer,
 ) -> Result<PythonEnvironment, ProjectError> {
     let venv = project.workspace().root().join(".venv");
 
+    let requires_python = project
+        .current_project()
+        .pyproject_toml()
+        .project
+        .as_ref()
+        .and_then(|project| project.requires_python.as_ref());
+
     // Discover or create the virtual environment.
-    // TODO(charlie): If the environment isn't compatible with `--python`, recreate it.
     match PythonEnvironment::from_root(&venv, cache) {
-        Ok(venv) => Ok(venv),
-        Err(uv_interpreter::Error::NotFound(_)) => {
-            // TODO(charlie): Respect `--python`; if unset, respect `Requires-Python`.
-            let interpreter = find_default_interpreter(preview, cache)
-                .map_err(uv_interpreter::Error::from)?
-                .map_err(uv_interpreter::Error::from)?
-                .into_interpreter();
+        Ok(venv) => {
+            // `--python` has highest precedence, after that we check `requires_python` from
+            // `pyproject.toml`. If `--python` and `requires_python` are mutually incompatible,
+            // we'll fail at the build or at last the install step when we aren't able to install
+            // the editable wheel for the current project into the venv.
+            // TODO(konsti): Do we want to support a workspace python version requirement?
+
+            let venv_python_satisfactory = if let Some(python) = python {
+                InterpreterRequest::parse(python).satisfied(venv.interpreter())
+            } else if let Some(requires_python) = requires_python {
+                requires_python.contains(venv.interpreter().python_version())
+            } else {
+                true
+            };
+
+            if venv_python_satisfactory {
+                return Ok(venv);
+            }
 
             writeln!(
                 printer.stderr(),
-                "Using Python {} interpreter at: {}",
-                interpreter.python_version(),
-                interpreter.sys_executable().user_display().cyan()
+                "Removing virtualenv at: {}",
+                venv.root().user_display().cyan()
             )?;
-
-            writeln!(
-                printer.stderr(),
-                "Creating virtualenv at: {}",
-                venv.user_display().cyan()
-            )?;
-
-            Ok(uv_virtualenv::create_venv(
-                &venv,
-                interpreter,
-                uv_virtualenv::Prompt::None,
-                false,
-                false,
-            )?)
+            fs_err::remove_dir_all(venv.root())?;
         }
-        Err(e) => Err(e.into()),
+        Err(uv_interpreter::Error::NotFound(_)) => {}
+        Err(e) => return Err(e.into()),
     }
+
+    // TODO(konsti): If `--python` is unset, respect `Requires-Python`. This requires extending
+    //   `VersionRequest` to support `VersionSpecifiers`.
+    let interpreter = if let Some(python) = python.as_ref() {
+        PythonEnvironment::from_requested_python(python, SystemPython::Allowed, preview, cache)?
+            .into_interpreter()
+    } else {
+        PythonEnvironment::from_default_python(preview, cache)?.into_interpreter()
+    };
+
+    writeln!(
+        printer.stderr(),
+        "Using Python {} interpreter at: {}",
+        interpreter.python_version(),
+        interpreter.sys_executable().user_display().cyan()
+    )?;
+
+    writeln!(
+        printer.stderr(),
+        "Creating virtualenv at: {}",
+        venv.user_display().cyan()
+    )?;
+
+    Ok(uv_virtualenv::create_venv(
+        &venv,
+        interpreter,
+        uv_virtualenv::Prompt::None,
+        false,
+        false,
+    )?)
 }
 
 /// Update a [`PythonEnvironment`] to satisfy a set of [`RequirementsSource`]s.
