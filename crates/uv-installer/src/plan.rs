@@ -76,6 +76,8 @@ impl<'a> Planner<'a> {
             BuildHasherDefault::default(),
         );
 
+        debug!("site_packages: {:?}", site_packages);
+
         for requirement in self.requirements {
             // Filter out incompatible requirements.
             if !requirement.evaluate_markers(Some(venv.interpreter().markers()), &[]) {
@@ -113,11 +115,11 @@ impl<'a> Planner<'a> {
                 NoBinary::Packages(packages) => packages.contains(&requirement.name),
             };
 
+            let installed_dists = site_packages.remove_packages(&requirement.name);
+
             if reinstall {
-                let installed_dists = site_packages.remove_packages(&requirement.name);
                 reinstalls.extend(installed_dists);
             } else {
-                let installed_dists = site_packages.remove_packages(&requirement.name);
                 match installed_dists.as_slice() {
                     [] => {}
                     [distribution] => {
