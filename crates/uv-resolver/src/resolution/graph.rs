@@ -1,5 +1,6 @@
 use std::hash::BuildHasherDefault;
 
+use indexmap::IndexMap;
 use petgraph::{
     graph::{Graph, NodeIndex},
     Directed,
@@ -442,18 +443,42 @@ impl ResolutionGraph {
         Ok(MarkerTree::And(conjuncts))
     }
 
-    pub fn lock(&self) -> anyhow::Result<Lock, LockError> {
-        let mut locked_dists = vec![];
+    pub fn lock(&self) -> Result<Lock, LockError> {
+        let mut locked_dists = IndexMap::with_capacity(self.petgraph.node_count());
+
+        // Lock all base packages.
         for node_index in self.petgraph.node_indices() {
             let dist = &self.petgraph[node_index];
+            if dist.extra.is_some() {
+                continue;
+            }
+
             let mut locked_dist = lock::Distribution::from_annotated_dist(dist)?;
             for neighbor in self.petgraph.neighbors(node_index) {
                 let dependency_dist = &self.petgraph[neighbor];
                 locked_dist.add_dependency(dependency_dist);
             }
-            locked_dists.push(locked_dist);
+            if let Some(locked_dist) = locked_dists.insert(locked_dist.id.clone(), locked_dist) {
+                return Err(LockError::duplicate_distribution(locked_dist.id));
+            }
         }
-        let lock = Lock::new(locked_dists)?;
+
+        // Lock all extras.
+        for node_index in self.petgraph.node_indices() {
+            let dist = &self.petgraph[node_index];
+            if let Some(extra) = dist.extra.as_ref() {
+                let id = lock::DistributionId::from_annotated_dist(dist);
+                let Some(locked_dist) = locked_dists.get_mut(&id) else {
+                    return Err(LockError::missing_base(id, extra.clone()));
+                };
+                for neighbor in self.petgraph.neighbors(node_index) {
+                    let dependency_dist = &self.petgraph[neighbor];
+                    locked_dist.add_optional_dependency(extra.clone(), dependency_dist);
+                }
+            }
+        }
+
+        let lock = Lock::new(locked_dists.into_values().collect())?;
         Ok(lock)
     }
 }
